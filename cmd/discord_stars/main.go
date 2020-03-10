@@ -5,11 +5,23 @@ import (
 	"fmt"
 	dgo "github.com/bwmarrin/discordgo"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"regexp"
+	"strings"
 	"syscall"
 )
+
+var discordToken string
+var brawlStarsAPIToken string
+var client *http.Client
+
+func addApiHeaders(request *http.Request) {
+	request.Header.Add("Accept", "application/json")
+	request.Header.Add("authorization", "Bearer "+brawlStarsAPIToken)
+}
 
 func sendHelp(session *dgo.Session, channel string) error {
 	helpString := "```\n" +
@@ -17,6 +29,35 @@ func sendHelp(session *dgo.Session, channel string) error {
 		"\t- ;h[elp]: Display this message.\n" +
 		"```"
 	_, e := session.ChannelMessageSend(channel, helpString)
+	return e
+}
+
+func registerPlayer(session *dgo.Session, channel string) error {
+	return nil
+}
+
+func showPlayerData(session *dgo.Session, channel string, player string) error {
+	playerUrl := url.PathEscape(player)
+	request, e := http.NewRequest("GET", "https://api.brawlstars.com/v1/players/"+playerUrl, nil)
+	if e != nil {
+		return e
+	}
+	addApiHeaders(request)
+	response, e := client.Do(request)
+	if e != nil {
+		return e
+	}
+	if response.StatusCode != 200 {
+		return fmt.Errorf("player with id %s not found", player)
+	}
+	playerDataJson := response.Body
+	playerDataJson.Close()
+	// playerData := json.Unmarshal(playerDataJson.Read())
+	playerDataString := "```\n" +
+		"Usage of this bot (all commands are preceded by \";\"):\n" +
+		"\t- ;h[elp]: Display this message.\n" +
+		"```"
+	_, e = session.ChannelMessageSend(channel, playerDataString)
 	return e
 }
 
@@ -31,6 +72,12 @@ func messageHandler(session *dgo.Session, m *dgo.MessageCreate) {
 		switch matchedCommand[1] {
 		case "h", "help":
 			e = sendHelp(session, m.ChannelID)
+		case "r", "register":
+			e = registerPlayer(session, m.ChannelID)
+		case "info":
+			matchedLastIndex := re.FindStringSubmatchIndex(m.Content)[3]
+			playerId := strings.TrimSpace(m.Content[matchedLastIndex:])
+			e = showPlayerData(session, m.ChannelID, playerId)
 		default:
 			log.Printf("The command %s was invalid ", m.Content)
 		}
@@ -40,35 +87,65 @@ func messageHandler(session *dgo.Session, m *dgo.MessageCreate) {
 	}
 }
 
-func getToken() (token string, e error) {
-	token = ""
-	e = nil
+func getTokens() (e error) {
 	tokenFlag := flag.String("token", "", "Token found in https://discordapp.com/developers/applications/<bot_id>/bot")
+	apiToken := flag.String("apiToken", "", "Token obtained in the Brawl Stars developers portal")
 	flag.Parse()
-	tokenEnv, found := syscall.Getenv("DISCORD_STARS_TOKEN")
-	if !found {
+	tokenEnv, foundToken := syscall.Getenv("DISCORD_STARS_TOKEN")
+	apiTokenEnv, foundApiToken := syscall.Getenv("BRAWL_STARS_API_TOKEN")
+	if !foundToken {
 		if *tokenFlag == "" {
-			e = fmt.Errorf("token was not found")
+			e = fmt.Errorf("discord token was not found")
 			flag.PrintDefaults()
 		} else {
-			token = *tokenFlag
+			discordToken = *tokenFlag
 		}
-		return
 	} else {
-		token = tokenEnv
+		discordToken = tokenEnv
+	}
+	if !foundApiToken {
+		if *apiToken == "" {
+			e = fmt.Errorf("brawl stars api token not found")
+		} else {
+			brawlStarsAPIToken = *apiToken
+		}
+	} else {
+		brawlStarsAPIToken = apiTokenEnv
+	}
+	return
+}
+
+func testApi() (e error) {
+	request, e := http.NewRequest("GET", "https://api.brawlstars.com/v1/players/%239UG88U0RJ", nil)
+	if e != nil {
+		return
+	}
+	addApiHeaders(request)
+	response, e := client.Do(request)
+	if e != nil {
+		return
+	}
+	if response.StatusCode != 200 {
+		e = fmt.Errorf("the api returned status code %v", response.StatusCode)
 	}
 	return
 }
 
 func main() {
-	token, e := getToken()
+	e := getTokens()
 	if e != nil {
-		fmt.Println("An error occurred: ", e)
+		fmt.Println("An error occurred when obtaining the tokens: ", e)
 		return
 	}
-	session, e := dgo.New("Bot " + token)
+	session, e := dgo.New("Bot " + discordToken)
 	if e != nil {
-		fmt.Println("An error occurred: ", e)
+		fmt.Println("An error occurred when opening a connection to Discord: ", e)
+		return
+	}
+	client = &http.Client{}
+	e = testApi()
+	if e != nil {
+		fmt.Println("An error occurred when testing the API: ", e)
 		return
 	}
 	// Register the messageCreate func as a callback for MessageCreate events.
