@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	dgo "github.com/bwmarrin/discordgo"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -27,6 +29,7 @@ func sendHelp(session *dgo.Session, channel string) error {
 	helpString := "```\n" +
 		"Usage of this bot (all commands are preceded by \";\"):\n" +
 		"\t- ;h[elp]: Display this message.\n" +
+		"\t- ;info <player tag>: Display data about a player with tag <player tag>. If no tag is provided, or there isn't any player with it, no data will be shown." +
 		"```"
 	_, e := session.ChannelMessageSend(channel, helpString)
 	return e
@@ -50,13 +53,23 @@ func showPlayerData(session *dgo.Session, channel string, player string) error {
 	if response.StatusCode != 200 {
 		return fmt.Errorf("player with id %s not found", player)
 	}
-	playerDataJson := response.Body
-	playerDataJson.Close()
-	// playerData := json.Unmarshal(playerDataJson.Read())
-	playerDataString := "```\n" +
-		"Usage of this bot (all commands are preceded by \";\"):\n" +
-		"\t- ;h[elp]: Display this message.\n" +
-		"```"
+	defer response.Body.Close()
+	body, e := ioutil.ReadAll(response.Body)
+	if e != nil {
+		return e
+	}
+	var playerDataDict map[string]interface{}
+	e = json.Unmarshal(body, &playerDataDict)
+	playerDataString := fmt.Sprintf(
+		"```\n"+
+			"Player name: %v\n"+
+			"Trophies: %v\n"+
+			"Victories: %v\n"+
+			"```",
+		playerDataDict["name"].(string),
+		playerDataDict["trophies"].(float64),
+		playerDataDict["3vs3Victories"].(float64))
+
 	_, e = session.ChannelMessageSend(channel, playerDataString)
 	return e
 }
